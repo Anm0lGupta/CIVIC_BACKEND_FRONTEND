@@ -1,0 +1,5 @@
+/* Removed default Vite styles that were breaking the layout */
+#root {
+  width: 100%;
+  height: 100%;
+}
