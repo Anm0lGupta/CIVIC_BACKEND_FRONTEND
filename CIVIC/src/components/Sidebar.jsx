@@ -1,16 +1,17 @@
 // src/components/Sidebar.jsx
 
 import { NavLink } from 'react-router-dom'
-import { Home, Map, BarChart3, User, PlusCircle, Shield, Wifi, Search } from 'lucide-react'
+import { Home, Map, BarChart3, User, PlusCircle, Shield, Wifi, Search, Users } from 'lucide-react'
 
 const navItems = [
-  { icon: Home,       label: 'Dashboard',       path: '/dashboard' },
-  { icon: Wifi,       label: 'Social Scraper',  path: '/social',   badge: 'AI' },
-  { icon: Map,        label: 'Map View',         path: '/map' },
-  { icon: PlusCircle, label: 'Report Issue',     path: '/report' },
-  { icon: Search,     label: 'Track Complaint',  path: '/track' },
-  { icon: BarChart3,  label: 'Scorecards',       path: '/scorecards' },
-  { icon: User,       label: 'Profile',          path: '/profile' },
+  { icon: Home,       label: 'Dashboard',         path: '/dashboard' },
+  { icon: Wifi,       label: 'Social Scraper',    path: '/social',    badge: 'AI'  },
+  { icon: Users,      label: 'Community Connect', path: '/community', badge: 'NEW' },
+  { icon: Map,        label: 'Map View',           path: '/map' },
+  { icon: PlusCircle, label: 'Report Issue',       path: '/report' },
+  { icon: Search,     label: 'Track Complaint',    path: '/track' },
+  { icon: BarChart3,  label: 'Scorecards',         path: '/scorecards' },
+  { icon: User,       label: 'Profile',            path: '/profile' },
 ]
 
 export default function Sidebar() {
@@ -45,7 +46,9 @@ export default function Sidebar() {
                   <Icon className="w-5 h-5 flex-shrink-0" />
                   <span className="font-medium flex-1">{item.label}</span>
                   {item.badge && (
-                    <span className="text-xs bg-violet-500 text-white px-1.5 py-0.5 rounded font-bold">
+                    <span className={`text-xs text-white px-1.5 py-0.5 rounded font-bold ${
+                      item.badge === 'NEW' ? 'bg-green-500' : 'bg-violet-500'
+                    }`}>
                       {item.badge}
                     </span>
                   )}

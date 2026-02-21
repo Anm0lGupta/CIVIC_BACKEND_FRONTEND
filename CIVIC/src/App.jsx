@@ -16,6 +16,7 @@ import SocialFeed from "./pages/SocialFeed"
 import TrackComplaint from "./pages/TrackComplaint"
 import ProfilePage from "./pages/ProfilePage"
 import { mockComplaints } from "./data/mockComplaints"
+import CommunityConnect from "./pages/CommunityConnect"
 
 function ProtectedRoute({ user, children }) {
   if (!user) return <Navigate to="/" replace />
@@ -158,6 +159,8 @@ function App() {
           </AppShell>
         </ProtectedRoute>
       } />
+
+      <Route path="/community" element={<CommunityConnect user={user} addComplaint={addComplaint} />} />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

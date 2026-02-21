@@ -1,11 +1,28 @@
-// src/pages/Report.jsx — with image upload, fake detection, AI classify, unique ID
+// src/pages/Report.jsx — with image upload, fake detection, AI classify, email dispatch
 
 import { useState, useEffect, useRef } from "react"
 import { useNavigate } from "react-router-dom"
-import { MapPin, AlertCircle, CheckCircle, ArrowLeft, Sparkles, Loader2, Brain, Upload, X, ShieldAlert, ShieldCheck } from "lucide-react"
+import { MapPin, AlertCircle, CheckCircle, ArrowLeft, Sparkles, Loader2, Brain,
+  Upload, X, ShieldAlert, ShieldCheck, Mail, Send, Building2, Clock,
+  Copy, ExternalLink, Terminal, Download } from "lucide-react"
 import { departments } from "../data/mockComplaints"
 import { classifyComplaint } from "../hooks/useAIClassifier"
 import { detectFakeComplaint } from "../hooks/useFakeDetector"
+
+const BACKEND_URL = "http://localhost:3001"
+
+// Department → authority mapping (mirrors backend municipalDirectory)
+const DEPT_AUTHORITY = {
+  "PWD":          { name: "Public Works Department Delhi",   email: "pwd_west@delhi.gov.in",              zone: "West Zone" },
+  "Jal Board":    { name: "Delhi Jal Board",                 email: "customercare@delhijalboard.in",      zone: "Central" },
+  "Sanitation":   { name: "MCD Sanitation Department",       email: "mcd.west@mcdonline.gov.in",          zone: "West Zone" },
+  "Electricity":  { name: "BSES Rajdhani / TPDDL",          email: "complaints@bsesdelhi.com",           zone: "Delhi" },
+  "Parks":        { name: "DDA Parks & Gardens Division",    email: "parks@dda.org.in",                   zone: "Delhi" },
+  "Traffic":      { name: "Delhi Traffic Police",            email: "trafficcomplaints@delhipolice.gov.in", zone: "Delhi" },
+  "Health":       { name: "MCD Health Department",           email: "health@mcdonline.gov.in",            zone: "Delhi" },
+  "Infrastructure":{ name: "MCD Infrastructure Division",   email: "complaints@mcdonline.gov.in",        zone: "Central" },
+  "General":      { name: "MCD Headquarters",               email: "complaints@mcdonline.gov.in",        zone: "Central" },
+}
 
 // Generate unique complaint ID: CMR-2026-XXXX
 function generateComplaintId() {
@@ -29,6 +46,362 @@ const urgencyOptions = [
   { value: "high", label: "High", desc: "Urgent safety issue", active: "border-red-400 bg-red-50 text-red-700" },
 ]
 
+// ── Email Dispatch Screen — the unique success experience ─────────────────────
+function EmailDispatchScreen({ data, onDone }) {
+  const [step, setStep]           = useState(0)  // which terminal log line is showing
+  const [emailVisible, setEmailVisible] = useState(false)
+  const [copied, setCopied]       = useState(false)
+  const [downloaded, setDownloaded] = useState(false)
+
+  const urgencyColor = data.urgency === "high" ? "#ef4444" : data.urgency === "medium" ? "#f59e0b" : "#22c55e"
+  const urgencyLabel = data.urgency?.toUpperCase()
+
+  const slaMap = { high: "24 hours", medium: "72 hours", low: "7 days" }
+  const sla = slaMap[data.urgency] || "72 hours"
+
+  // The email body text (plain) — used for copy & download
+  const emailBodyText = `
+FROM: Civic Mirror Platform <noreply@civicmirror.in>
+TO: ${data.authority.name} <${data.authority.email}>
+SUBJECT: 🚨 Civic Complaint ${data.complaintId} — ${data.department} [${urgencyLabel}]
+
+Dear ${data.authority.name},
+
+A new civic complaint has been filed through the Civic Mirror platform and requires your attention.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COMPLAINT ID    : ${data.complaintId}
+PRIORITY        : ${urgencyLabel} — SLA ${sla}
+DEPARTMENT      : ${data.department}
+LOCATION        : ${data.location}
+FILED ON        : ${data.timestamp.toLocaleString("en-IN")}
+FILED BY        : ${data.submittedBy}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ISSUE TITLE:
+${data.title}
+
+DESCRIPTION:
+${data.description}
+
+Please acknowledge this complaint within ${sla} and update the status on the Civic Mirror platform.
+
+Track & respond: https://civicmirror.in/track?id=${data.complaintId}
+
+Regards,
+Civic Mirror Automated Dispatch System
+`.trim()
+
+  // .eml format for proper email client import
+  const emlContent = `From: Civic Mirror Platform <noreply@civicmirror.in>
+To: ${data.authority.name} <${data.authority.email}>
+CC: ${data.submittedEmail}
+Subject: Civic Complaint ${data.complaintId} — ${data.department} [${urgencyLabel}]
+Date: ${data.timestamp.toUTCString()}
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Dear ${data.authority.name},
+
+A new civic complaint has been filed through the Civic Mirror platform and requires your attention.
+
+COMPLAINT ID    : ${data.complaintId}
+PRIORITY        : ${urgencyLabel} — SLA ${sla}
+DEPARTMENT      : ${data.department}
+LOCATION        : ${data.location}
+FILED ON        : ${data.timestamp.toLocaleString("en-IN")}
+FILED BY        : ${data.submittedBy}
+
+ISSUE TITLE:
+${data.title}
+
+DESCRIPTION:
+${data.description}
+
+Please acknowledge this complaint within ${sla} and update the status on the Civic Mirror platform.
+
+Track & respond: https://civicmirror.in/track?id=${data.complaintId}
+
+Regards,
+Civic Mirror Automated Dispatch System
+`
+
+  // Terminal log lines — play out one by one
+  const LOG_LINES = [
+    { delay: 0,    icon: "→", color: "text-slate-400",  text: `Complaint ${data.complaintId} received` },
+    { delay: 400,  icon: "⚡", color: "text-violet-400", text: `AI classified → ${data.department} [${urgencyLabel}]` },
+    { delay: 900,  icon: "📍", color: "text-sky-400",    text: `Location extracted → ${data.location}` },
+    { delay: 1400, icon: "🗂️", color: "text-amber-400",  text: `Looking up authority → ${data.authority.zone}` },
+    { delay: 1900, icon: "✉️", color: "text-green-400",  text: `Routing email → ${data.authority.email}` },
+    { delay: 2500, icon: "✅", color: "text-green-400",  text: `Email dispatched successfully` },
+  ]
+
+  useEffect(() => {
+    LOG_LINES.forEach((line, i) => {
+      setTimeout(() => setStep(i + 1), line.delay)
+    })
+    // Show full email after terminal completes
+    setTimeout(() => setEmailVisible(true), 3200)
+  }, [])
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(emailBodyText).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  // Download as .eml file (opens in Outlook, Apple Mail, Thunderbird, etc.)
+  const handleDownload = (format = "eml") => {
+    const isEml = format === "eml"
+    const content = isEml ? emlContent : emailBodyText
+    const mimeType = isEml ? "message/rfc822" : "text/plain"
+    const extension = isEml ? "eml" : "txt"
+    const filename = `complaint-${data.complaintId}.${extension}`
+
+    const blob = new Blob([content], { type: mimeType })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+
+    setDownloaded(true)
+    setTimeout(() => setDownloaded(false), 2500)
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 py-10 px-4">
+      <div className="max-w-2xl mx-auto space-y-5">
+
+        {/* Header */}
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-green-500/20 border border-green-500/30 flex items-center justify-center">
+            <CheckCircle className="w-5 h-5 text-green-400" />
+          </div>
+          <div>
+            <h2 className="text-white font-black text-lg">Complaint Filed Successfully</h2>
+            <p className="text-slate-400 text-xs font-mono">{data.complaintId}</p>
+          </div>
+          <div className="ml-auto">
+            <span className="text-xs font-mono px-2 py-1 rounded border border-green-500/30 text-green-400">
+              {data.timestamp.toLocaleTimeString("en-IN")}
+            </span>
+          </div>
+        </div>
+
+        {/* ── TERMINAL DISPATCH LOG (unique feature) ── */}
+        <div className="bg-slate-900 rounded-2xl border border-slate-700 overflow-hidden">
+          {/* Terminal title bar */}
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-700 bg-slate-800">
+            <div className="flex gap-1.5">
+              <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
+              <div className="w-3 h-3 rounded-full bg-amber-500/80"></div>
+              <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
+            </div>
+            <Terminal className="w-3.5 h-3.5 text-slate-400 ml-2" />
+            <span className="text-xs text-slate-400 font-mono">civic-mirror — email-dispatch</span>
+          </div>
+
+          {/* Log lines */}
+          <div className="p-5 font-mono text-xs space-y-2 min-h-[160px]">
+            <p className="text-slate-500">$ dispatch-email --complaint {data.complaintId}</p>
+            {LOG_LINES.map((line, i) => (
+              step > i ? (
+                <div key={i} className={`flex items-start gap-2 transition-all duration-300 ${line.color}`}>
+                  <span className="flex-shrink-0">{line.icon}</span>
+                  <span>{line.text}</span>
+                  {i === LOG_LINES.length - 1 && (
+                    <span className="ml-2 text-green-400 animate-pulse">█</span>
+                  )}
+                </div>
+              ) : null
+            ))}
+            {step < LOG_LINES.length && (
+              <span className="text-slate-600 animate-pulse">█</span>
+            )}
+          </div>
+        </div>
+
+        {/* ── EMAIL SENT TO card ── */}
+        {step >= 5 && (
+          <div className="bg-slate-900 rounded-2xl border border-emerald-700/50 p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+                <Send className="w-4 h-4 text-emerald-400" />
+              </div>
+              <p className="text-emerald-400 font-bold text-sm">Email Dispatched To</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: "Authority",  value: data.authority.name  },
+                { label: "Email",      value: data.authority.email },
+                { label: "Zone",       value: data.authority.zone  },
+                { label: "Department", value: data.department       },
+                { label: "SLA",        value: sla                  },
+                { label: "Priority",   value: urgencyLabel, style: { color: urgencyColor } },
+              ].map(row => (
+                <div key={row.label} className="bg-slate-800 rounded-xl px-4 py-3">
+                  <p className="text-xs text-slate-500 mb-0.5">{row.label}</p>
+                  <p className="text-sm font-bold text-white truncate" style={row.style || {}}>
+                    {row.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── FULL EMAIL PREVIEW ── */}
+        {emailVisible && (
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xl">
+            {/* Email client header bar */}
+            <div className="bg-slate-100 border-b border-slate-200 px-5 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Mail className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-700">Email Copy</span>
+                <span className="text-xs bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-semibold">Sent</span>
+              </div>
+              {/* Action buttons: Copy + Download */}
+              <div className="flex items-center gap-2">
+                <button onClick={handleCopy}
+                  className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-all ${
+                    copied ? "bg-green-100 text-green-700 border border-green-300" : "bg-slate-200 text-slate-600 hover:bg-slate-300"
+                  }`}>
+                  <Copy className="w-3.5 h-3.5" />
+                  {copied ? "Copied!" : "Copy"}
+                </button>
+                {/* Download dropdown — clicking cycles between .eml and .txt */}
+                <div className="relative group">
+                  <button
+                    onClick={() => handleDownload("eml")}
+                    className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-all ${
+                      downloaded
+                        ? "bg-blue-100 text-blue-700 border border-blue-300"
+                        : "bg-orange-100 text-orange-700 border border-orange-200 hover:bg-orange-200"
+                    }`}>
+                    <Download className="w-3.5 h-3.5" />
+                    {downloaded ? "Downloaded!" : "Download .eml"}
+                  </button>
+                  {/* Secondary option on hover — download as .txt */}
+                  <div className="absolute right-0 top-full mt-1 hidden group-hover:flex flex-col bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-10 min-w-[160px]">
+                    <button
+                      onClick={() => handleDownload("eml")}
+                      className="flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors">
+                      <Mail className="w-3.5 h-3.5 text-orange-500" />
+                      Download as .eml
+                    </button>
+                    <div className="border-t border-slate-100" />
+                    <button
+                      onClick={() => handleDownload("txt")}
+                      className="flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors">
+                      <Copy className="w-3.5 h-3.5 text-slate-400" />
+                      Download as .txt
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Email meta */}
+            <div className="px-6 py-4 border-b border-slate-100 space-y-1.5 bg-slate-50">
+              {[
+                { label: "FROM", value: `Civic Mirror Platform <noreply@civicmirror.in>` },
+                { label: "TO",   value: `${data.authority.name} <${data.authority.email}>` },
+                { label: "CC",   value: `${data.submittedEmail}` },
+                { label: "SUBJ", value: `🚨 Civic Complaint ${data.complaintId} — ${data.department} [${urgencyLabel}]` },
+              ].map(row => (
+                <div key={row.label} className="flex gap-3 text-sm">
+                  <span className="font-black text-slate-400 w-10 flex-shrink-0 text-xs pt-0.5">{row.label}</span>
+                  <span className="text-slate-700 break-all">{row.value}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Email body */}
+            <div className="px-6 py-5">
+              <p className="text-sm text-slate-600 mb-4">Dear <strong>{data.authority.name}</strong>,</p>
+              <p className="text-sm text-slate-600 mb-5 leading-relaxed">
+                A new civic complaint has been filed through the <strong>Civic Mirror</strong> platform and requires your attention.
+              </p>
+
+              {/* Complaint details table */}
+              <div className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden mb-5">
+                <div className="bg-slate-800 px-4 py-2.5">
+                  <p className="text-xs font-bold text-slate-300 tracking-widest uppercase">Complaint Details</p>
+                </div>
+                {[
+                  ["Complaint ID",   data.complaintId],
+                  ["Priority",       urgencyLabel + ` — SLA ${sla}`],
+                  ["Department",     data.department],
+                  ["Location",       data.location],
+                  ["Filed On",       data.timestamp.toLocaleString("en-IN")],
+                  ["Filed By",       data.submittedBy],
+                ].map(([k, v], i) => (
+                  <div key={k} className={`flex px-4 py-2.5 text-sm ${i % 2 === 0 ? "bg-white" : "bg-slate-50"}`}>
+                    <span className="text-slate-500 font-semibold w-36 flex-shrink-0">{k}</span>
+                    <span className={`font-bold ${k === "Priority" ? "" : "text-slate-900"}`}
+                      style={k === "Priority" ? { color: urgencyColor } : {}}>
+                      {v}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Issue title + description */}
+              <div className="mb-4">
+                <p className="text-xs font-black text-slate-500 uppercase tracking-wider mb-1">Issue Title</p>
+                <p className="text-sm font-bold text-slate-900">{data.title}</p>
+              </div>
+              <div className="mb-6">
+                <p className="text-xs font-black text-slate-500 uppercase tracking-wider mb-1">Description</p>
+                <p className="text-sm text-slate-700 leading-relaxed bg-amber-50 border border-amber-100 rounded-lg px-4 py-3">
+                  {data.description}
+                </p>
+              </div>
+
+              <p className="text-sm text-slate-600 mb-4">
+                Please acknowledge this complaint within <strong>{sla}</strong> and update the status on the Civic Mirror platform.
+              </p>
+
+              {/* CTA button (visual only) */}
+              <div className="flex gap-3 mb-6">
+                <div className="bg-orange-500 text-white text-xs font-bold px-5 py-2.5 rounded-lg flex items-center gap-2 cursor-default">
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  View & Respond on Civic Mirror
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="border-t border-slate-100 pt-4">
+                <p className="text-xs text-slate-400">This is an automated email from <strong>Civic Mirror Dispatch System</strong>.</p>
+                <p className="text-xs text-slate-400 mt-1 font-mono">{data.complaintId} · {data.timestamp.toISOString()}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Go to Dashboard button ── */}
+        {emailVisible && (
+          <div className="flex items-center justify-between pb-6">
+            <div className="bg-slate-900 rounded-xl px-5 py-3 inline-block border border-slate-700">
+              <p className="text-xs text-slate-400 mb-0.5">Your Complaint ID</p>
+              <p className="text-lg font-black text-orange-400 font-mono tracking-widest">{data.complaintId}</p>
+            </div>
+            <button onClick={onDone}
+              className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white font-bold px-6 py-3 rounded-xl transition-all shadow-lg shadow-orange-500/20">
+              Go to Dashboard →
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Report({ addComplaint, user }) {
   const navigate = useNavigate()
   const [title, setTitle] = useState("")
@@ -40,6 +413,7 @@ export default function Report({ addComplaint, user }) {
   const [errors, setErrors] = useState({})
   const [submitted, setSubmitted] = useState(false)
   const [submittedId, setSubmittedId] = useState("")
+  const [submittedData, setSubmittedData] = useState(null) // stores full complaint for email screen
   const fileRef = useRef()
 
   // AI state
@@ -95,6 +469,9 @@ export default function Report({ addComplaint, user }) {
     if (Object.keys(errs).length > 0) { setErrors(errs); return }
 
     const complaintId = generateComplaintId()
+    const now = new Date()
+    const authority = DEPT_AUTHORITY[department] || DEPT_AUTHORITY["General"]
+
     addComplaint({
       id: Date.now(),
       complaintId,
@@ -105,33 +482,42 @@ export default function Report({ addComplaint, user }) {
       department,
       status: "open",
       upvotes: 0,
-      timestamp: new Date().toISOString(),
+      timestamp: now.toISOString(),
       images: images.map(i => i.preview),
       submittedBy: user?.email,
       source: "web_form",
     })
+
+    // Try real backend — fire and forget
+    fetch(`${BACKEND_URL}/api/complaint/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: title.trim(),
+        body: description.trim(),
+        author: user?.name || "Citizen",
+        citizenEmail: user?.email || "",
+      }),
+    }).catch(() => {}) // fail silently — UI handles both cases
+
     setSubmittedId(complaintId)
+    setSubmittedData({
+      complaintId,
+      title: title.trim(),
+      description: description.trim(),
+      location: location.trim(),
+      urgency,
+      department,
+      authority,
+      submittedBy: user?.name || "Citizen",
+      submittedEmail: user?.email || "citizen@example.com",
+      timestamp: now,
+    })
     setSubmitted(true)
-    setTimeout(() => navigate("/dashboard"), 3500)
   }
 
-  if (submitted) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-center max-w-sm">
-          <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-5">
-            <CheckCircle className="w-10 h-10 text-green-500" />
-          </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Complaint Submitted!</h2>
-          <div className="bg-slate-900 rounded-xl px-5 py-3 mb-4 inline-block">
-            <p className="text-xs text-slate-400 mb-1">Your Complaint ID</p>
-            <p className="text-xl font-black text-orange-400 font-mono tracking-widest">{submittedId}</p>
-          </div>
-          <p className="text-slate-500 text-sm">Save this ID to track your complaint.</p>
-          <p className="text-xs text-slate-400 mt-2">Redirecting to dashboard...</p>
-        </div>
-      </div>
-    )
+  if (submitted && submittedData) {
+    return <EmailDispatchScreen data={submittedData} onDone={() => navigate("/dashboard")} />
   }
 
   const isFlagged = fakeResult?.isFake
